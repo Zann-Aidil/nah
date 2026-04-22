@@ -1,0 +1,120 @@
+name: Titanic Preprocessing Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'preprocessing/**'
+      - 'train.csv'
+  workflow_dispatch:
+    inputs:
+      test_size:
+        description: 'Proporsi test split (0.0 - 1.0)'
+        required: false
+        default: '0.2'
+      random_state:
+        description: 'Random seed untuk reproduktivitas'
+        required: false
+        default: '42'
+
+jobs:
+  preprocessing:
+    name: Run Titanic Preprocessing Pipeline
+    runs-on: ubuntu-latest
+
+    steps:
+      # ─── 1. Checkout repository ───
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # ─── 2. Setup Python 3.12.7 ───
+      - name: Set up Python 3.12.7
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12.7"
+          cache: 'pip'
+
+      # ─── 3. Cek environment ───
+      - name: Check Env
+        run: |
+          python --version
+          pip --version
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Working directory: $(pwd)"
+
+      # ─── 4. Install dependensi ───
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install \
+            pandas>=2.0.0 \
+            numpy>=1.26.0 \
+            scikit-learn==1.6.0 \
+            matplotlib>=3.7.0 \
+            seaborn>=0.12.0
+
+      # ─── 5. Download dataset Titanic dari Kaggle API ───
+      # Catatan: Anda harus menambahkan KAGGLE_USERNAME dan KAGGLE_KEY
+      # ke repository secrets terlebih dahulu.
+      # Caranya: Settings → Secrets and variables → Actions → New repository secret
+      - name: Download Titanic dataset from Kaggle
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          pip install kaggle --quiet
+          mkdir -p ~/.kaggle
+          echo '{"username":"'"$KAGGLE_USERNAME"'","key":"'"$KAGGLE_KEY"'"}' > ~/.kaggle/kaggle.json
+          chmod 600 ~/.kaggle/kaggle.json
+          kaggle competitions download -c tfugp-titanic-ml-from-disaster -p ./
+          unzip -o tfugp-titanic-ml-from-disaster.zip -d ./
+          echo "Dataset berhasil didownload:"
+          ls -la *.csv
+
+      # ─── 6. Jalankan script preprocessing ───
+      - name: Run preprocessing script
+        run: |
+          cd preprocessing
+          python automate_NamaSiswa.py \
+            --input ../train.csv \
+            --output titanic_preprocessing.csv \
+            --test_size ${{ github.event.inputs.test_size || '0.2' }} \
+            --random_state ${{ github.event.inputs.random_state || '42' }}
+
+      # ─── 7. Validasi output ───
+      - name: Validate output file
+        run: |
+          if [ -f "preprocessing/titanic_preprocessing.csv" ]; then
+            echo "✅ File preprocessing berhasil dibuat!"
+            echo "Jumlah baris: $(wc -l < preprocessing/titanic_preprocessing.csv)"
+            echo "Preview header:"
+            head -n 3 preprocessing/titanic_preprocessing.csv
+          else
+            echo "❌ File preprocessing tidak ditemukan!"
+            exit 1
+          fi
+
+      # ─── 8. Upload artifact ke GitHub Actions ───
+      - name: Upload preprocessing artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: titanic-preprocessing-run-${{ github.run_number }}
+          path: |
+            preprocessing/titanic_preprocessing.csv
+          retention-days: 30
+
+      # ─── 9. Commit hasil ke repository ───
+      - name: Commit updated preprocessing file
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add preprocessing/titanic_preprocessing.csv
+          if git diff --staged --quiet; then
+            echo "Tidak ada perubahan. Tidak ada commit yang dibuat."
+          else
+            git commit -m "chore: update titanic_preprocessing.csv [Actions run #${{ github.run_number }}]"
+            git push
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
